@@ -1,0 +1,21 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "dotnet",
+    "Database:ConnectionString": "UseDevelopmentStorage=true",
+    "AzureAppConfiguration:ConnectionString": "Endpoint=https://tfp-tst-game-mech-appconf-ukw.azconfig.io;Id=uP5h-ln-s0:AXRLoMElGfbq5FiYAVcm;Secret=nwihLT9lK/XScryDOYglYPSCHdZ5qAZ4JxJd1pn1osI=",
+    "AzureEventGrid:Endpoint": "https://tfp-tst-game-mech-evtgrd-topic-ukw.ukwest-1.eventgrid.azure.net/api/events",
+    "AzureEventGrid:AccessKey": "8FuEjuR5utN/YsgYc5l6g3DjUuuECQHHqScwed1odcA=",
+    "AzureServiceBus:Topics:Operations": "operations",
+    "AzureServiceBus:Topics:Application": "application",
+    "AzureServiceBus:Topics:Application:Subscriptions:CreateHolidaySuggestion": "create_holidaysuggestion",
+    "AzureWebJobsServiceBus": "Endpoint=sb://example-ukw.example.net/;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=***********",
+    "JwtBearer:Authority": "https://login.microsoftonline.com/3ebeccde-c067-423c-94dc-fd772f01117e",
+    "JwtBearer:Audience": "api://1eb20974-f768-46b2-b6e1-dc2053d805d9",
+    "JwtBearer:Issuer": "https://sts.windows.net/3ebeccde-c067-423c-94dc-fd772f01117e/",
+    "JwtBearer:ValidateLifetime": false,
+    "HolidaySearchRecommendation:Tenants:0:Name": "tenant1",
+    "HolidaySearchRecommendation:Tenants:1:Name": "tenant2"
+  }
+}

@@ -1,0 +1,268 @@
+# Starter pipeline
+# Start with a minimal pipeline that you can customize to build and deploy your code.
+# Add steps that build, run tests, deploy, and more:
+# https://aka.ms/yaml
+
+trigger:
+- main
+
+variables:
+  serviceConnection: 'Microsoft Azure (footballpools0): #1001128(f1190a2f-30bc-43a2-81ec-1bb8335e99c1)'
+
+  # Azure Resource Manager connection created during pipeline creation
+  terraformVersion: '1.1.5'
+
+  # Dependency-Check version
+  dependencyCheckVersion: 'latest'
+
+resources:
+  repositories:
+  - repository: Infra_GameMechanics # The name used to reference this repository in the checkout step
+    type: github
+    endpoint: Sportech
+    name: Sportech/Infra_GameMechanics
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+- stage: Build
+  jobs:
+  - job: Build
+    steps:   
+    - checkout: self
+    - checkout: Infra_GameMechanics
+
+    - task: DockerInstaller@0
+      displayName: 'Install Docker'
+      inputs:
+        dockerVersion: '17.09.0-ce'
+    - task: Bash@3
+      displayName: 'Dependency-Check Scan'
+      inputs:
+        targetType: 'inline'
+        script: |
+          mkdir -p $(pwd)/odc-reports
+          chmod -R 777  ./        
+          docker run --rm \
+            -v $(pwd):/src:z \
+            -v $(pwd)/odc-reports:/report:z \
+            owasp/dependency-check:$(dependencyCheckVersion) \
+            --scan /src \
+            --format "ALL" \
+            --project "dependency-check scan: $(pwd)" \
+            --out /report
+          true
+        workingDirectory: 'GES_Draw_Module'
+   
+    - task: PublishTestResults@2
+      displayName: Publish Dependency-Check Test Results
+      condition: succeededOrFailed()
+      inputs:
+        testResultsFiles: '**/dependency-check-junit.xml'
+        mergeTestResults: true
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Dependency-Check Report'
+      inputs:
+        PathtoPublish: GES_Draw_Module/odc-reports
+        ArtifactName: 'dependency-check-report'
+        publishLocation: 'Container'
+
+    - task: UseDotNet@2
+      displayName: 'Use .NET sdk 6.0'
+      inputs:
+        packageType: sdk
+        version: 6.0.101
+        installationPath: $(Agent.ToolsDirectory)/dotnet
+
+    - task: DotNetCoreCLI@2
+      displayName: Build Application
+      inputs:
+        command: 'build'
+        projects: GES_Draw_Module/src/TFP.Example.Application/*.csproj
+        arguments: --output $(System.DefaultWorkingDirectory)/GES-Draw-Module-Application-publish --configuration Release
+    
+    - task: ArchiveFiles@2
+      displayName: 'Archive files'
+      inputs:
+        rootFolderOrFile: '$(System.DefaultWorkingDirectory)/GES-Draw-Module-Application-publish'
+        includeRootFolder: false
+        archiveType: zip
+        archiveFile: $(Build.ArtifactStagingDirectory)/GES-Draw-Module-Application-$(Build.BuildId).zip
+        replaceExistingArchive: true 
+  
+    - publish: $(Build.ArtifactStagingDirectory)
+      artifact: publish 
+
+
+- stage: Test
+  displayName: Test
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+  - job: Test
+    displayName: Test
+    steps:
+    - checkout: self
+    
+    - checkout: Infra_GameMechanics
+
+    - download: current
+      artifact: publish
+
+    - task: TerraformInstaller@0
+      displayName: 'Terraform Install'
+      inputs:
+        terraformVersion: '$(terraformVersion)'
+
+    - task: TerraformCLI@0
+      displayName: 'Terraform Init'
+      env:
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+      inputs:
+        command: 'init'
+        commandOptions: '-input=false'
+        backendType: 'azurerm'
+        backendServiceArm: '$(serviceConnection)'
+        backendAzureRmResourceGroupName: 'TFP_TERRAFORM_RG'
+        backendAzureRmStorageAccountName: 'tfpterraformsa'
+        backendAzureRmContainerName: 'tfstate'
+        backendAzureRmKey: 'TFP_TST_GAME_MECH_RG.tst.tfstate'
+        workingDirectory: Infra_GameMechanics/manifests/game_mechanics/test
+
+    - task: TerraformCLI@0
+      displayName: 'Terraform Validate'
+      inputs:
+        command: 'validate'
+        workingDirectory: Infra_GameMechanics/manifests/game_mechanics/test
+
+    - task: TerraformCLI@0
+      displayName: 'Terraform Destroy TST'
+      env:
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+      inputs:
+        command: 'destroy'
+        commandOptions: '-target=module.ges_primary'
+        workingDirectory: Infra_GameMechanics/manifests/game_mechanics/test
+    
+    - task: CmdLine@2
+      displayName: 'Wait for infrastructure to settle'
+      inputs:
+        script: 'sleep 180'
+
+    - task: TerraformCLI@0
+      displayName: 'Terraform Apply TST'
+      env:
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+      inputs:
+        command: 'apply'
+        commandOptions: '-target=module.ges_primary'
+        workingDirectory: Infra_GameMechanics/manifests/game_mechanics/test
+
+    - task: AzureFunctionApp@1
+      displayName: 'Deploy Application FunctionApp to TST'
+      inputs:
+        azureSubscription: $(serviceConnection)
+        appType: 'functionApp'
+        appName: TFP-TST-GESDRAWMOD-UKW
+        resourceGroupName: TFP_TST_GAME_MECH_RG_UKW
+        package: '$(Pipeline.Workspace)/publish/GES-Draw-Module-Application-$(Build.BuildId).zip'
+        deploymentMethod: 'auto'
+        
+    - task: Bash@3
+      displayName: 'OWASP ZAP API Scan'
+      inputs:
+        targetType: 'inline'
+        script: |
+          chmod -R 777  ./
+          docker run --rm -v $(pwd):/zap/wrk -t owasp/zap2docker-weekly zap-api-scan.py \
+            -t https://tfp-tst-gesdrawmod-ukw.azurewebsites.net/swagger/v1/swagger.json \
+            -r zap-api-scan-results.html \
+            -f openapi \
+            -z "-config replacer.full_list\(0\).description=auth1 \
+            -config replacer.full_list\(0\).enabled=true \
+            -config replacer.full_list\(0\).matchtype=REQ_HEADER \
+            -config replacer.full_list\(0\).matchstr=Authorization \
+            -config replacer.full_list\(0\).regex=false \
+            -config replacer.full_list\(0\).replacement=Bearer\ $(AUTH_TOKEN)"
+          true
+        workingDirectory: '$(Pipeline.Workspace)'
+
+    - task: PublishBuildArtifacts@1
+      displayName: 'Publish Zap Scan Report'
+      inputs:
+        PathtoPublish: '$(Pipeline.Workspace)'
+        ArtifactName: 'zap-report'
+        publishLocation: 'Container'
+
+    - task: UseDotNet@2
+      displayName: 'Use .NET sdk 6.0'
+      inputs:
+        packageType: sdk
+        version: 6.0.101
+        installationPath: $(Agent.ToolsDirectory)/dotnet
+
+    - task: DotNetCoreCLI@2
+      displayName: Run Contract Tests
+      env:
+        MicrosoftIdentityPlatform__Credentials__ClientSecret: $(OPS_CLIENT_TEST_SECRET)
+        ServiceBus__ConnectionString: $(OPS_SERVICE_BUS_CONNECTION_STRING)
+      inputs:
+        command: 'test'
+        arguments: --logger trx
+        projects: 'GES_Draw_Module/tests/TFP.Example.ContractTests/*.csproj'
+        testRunTitle: 'Contract Tests'
+    
+    - task: PublishTestResults@2
+      inputs:
+        testResultsFormat: 'XUnit'
+        testResultsFiles: '**/*.xml'
+        searchFolder: 'GES_Draw_Module'
+        testRunTitle: 'Contract Tests' 
+
+    - task: TerraformCLI@0
+      displayName: 'Terraform Destroy TST'
+      env:
+        ARM_SUBSCRIPTION_ID: $(ARM_SUBSCRIPTION_ID)
+        ARM_TENANT_ID: $(ARM_TENANT_ID)
+        ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+        ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+      inputs:
+        command: 'destroy'
+        commandOptions: '-target=module.ges_primary'
+        workingDirectory: Infra_GameMechanics/manifests/game_mechanics/test
+    
+    
+- stage: PROD
+  displayName: Production
+  dependsOn: Test
+  condition: and(succeeded(), eq(variables['build.sourceBranch'], 'refs/heads/main'))
+
+  jobs:
+  - deployment: Deploy
+    displayName: Deploy
+    environment: 'Production'
+    strategy:
+      runOnce:
+        deploy:
+          steps:
+          - task: AzureFunctionApp@1
+            displayName: 'Deploy Application FunctionApp to PROD'
+            inputs:
+              azureSubscription: $(serviceConnection)
+              appType: 'functionApp'
+              appName: TFP-PROD-GESDRAWMOD-UKW
+              resourceGroupName: TFP_PROD_GAME_MECH_RG_UKW
+              package: '$(Pipeline.Workspace)/publish/GES-Draw-Module-Application-$(Build.BuildId).zip'
+              deploymentMethod: 'auto'
+                          
